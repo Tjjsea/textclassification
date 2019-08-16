@@ -180,4 +180,10 @@ class bilstm_attention():
         pre=sess.run(self.pres)
         return pre
     
+class charCNN():
+    def __init__(self,flags):
+        self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
+        self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
+        self.keep_prob=tf.placeholder(tf.float32, name="keep_prob")
 
+        
