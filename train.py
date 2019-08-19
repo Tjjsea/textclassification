@@ -4,7 +4,6 @@
 import tensorflow as tf
 from get_batch import getbatch
 from models import bilstm,bilstm_attention
-from tqdm import tqdm
 import os
 import json
 import math
@@ -15,12 +14,11 @@ num_classes=6
 
 w2n=json.load(open('datas/w2n.json'))
 vocab_size=len(w2n)
-hiddensizes=[256]
+hiddensizes=[256,512]
 
 tf.app.flags.DEFINE_integer("sequence_length",sequence_length,"sequence length")
 tf.app.flags.DEFINE_integer("vocab_size",vocab_size,"vocab size")
 tf.app.flags.DEFINE_integer("embedding_dim",100,"word level embedding size")
-tf.app.flags.DEFINE_integer("char_biunits",256,"num of hidden layer for char embedding bilstm")
 tf.app.flags.DEFINE_integer("num_classes",num_classes,"num of POStags")
 tf.app.flags.DEFINE_integer("epochs",2,"num of epochs")
 tf.app.flags.DEFINE_integer("batch_size",batch_size,"batch size")
