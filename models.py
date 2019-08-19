@@ -231,32 +231,6 @@ class transformer():
             outputs = tf.reshape(self.transinput, [-1, flags.sequence_length * (flags.embedding_dim + flags.sequence_length)])
 
         outputSize = outputs.get_shape()[-1].value
-
-
-#         with tf.name_scope("wordEmbedding"):
-#             self.W = tf.Variable(tf.cast(wordEmbedding, dtype=tf.float32, name="word2vec"), name="W")
-#             self.wordEmbedded = tf.nn.embedding_lookup(self.W, self.inputX)
-        
-#         with tf.name_scope("positionEmbedding"):
-#             print(self.wordEmbedded)
-#             self.positionEmbedded = self._positionEmbedding()
-            
-#         self.embeddedWords = self.wordEmbedded + self.positionEmbedded
-            
-#         with tf.name_scope("transformer"):
-#             for i in range(config.model.numBlocks):
-#                 with tf.name_scope("transformer-{}".format(i + 1)):
-            
-#                     # 维度[batch_size, sequence_length, embedding_size]
-#                     multiHeadAtt = self._multiheadAttention(rawKeys=self.wordEmbedded, queries=self.embeddedWords,
-#                                                             keys=self.embeddedWords)
-#                     # 维度[batch_size, sequence_length, embedding_size]
-#                     self.embeddedWords = self._feedForward(multiHeadAtt, [config.model.filters, config.model.embeddingSize])
-                
-#             outputs = tf.reshape(self.embeddedWords, [-1, config.sequenceLength * (config.model.embeddingSize)])
-
-#         outputSize = outputs.get_shape()[-1].value
-
         
         with tf.name_scope("dropout"):
             outputs = tf.nn.dropout(outputs, keep_prob=self.dropoutKeepProb)
@@ -289,6 +263,7 @@ class transformer():
                 
             self.loss = tf.reduce_mean(losses) + flags.l2RegLambda * l2Loss
             self.accurcy=tf.equal(self.predictions,tf.argmax(self.inputY,-1))
+        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
             
     def _layerNormalization(self, inputs, scope="layerNorm"):
         # LayerNorm层和BN层有所不同
@@ -433,3 +408,27 @@ class transformer():
         positionEmbedded = tf.nn.embedding_lookup(positionEmbedding_, positionIndex)
 
         return positionEmbedded
+    
+    def train(self,sess,batch):
+        feed_dict={self.inputX:batch.input_x,
+                   self.inputY:batch.input_y,
+                   self.embeddedPosition:batch.position,
+                   self.dropoutKeepProb:0.5}
+        _,loss=sess.run([self.train_op,self.loss],feed_dict=feed_dict)
+        return loss
+    
+    def dev(self,sess,batch):
+        feed_dict={self.inputX:batch.input_x,
+                   self.inputY:batch.input_y,
+                   self.embeddedPosition:batch.position,
+                   self.dropoutKeepProb:0.5}
+        acc=sess.run(self.accuracy,feed_dict=feed_dict)
+        return acc
+    
+    def demo(self,sess,batch):
+        feed_dict={self.inputX:batch.input_x,
+                   self.embeddedPosition:batch.position,
+                   self.dropoutKeepProb:0.5}
+        pre=sess.run(self.predictions,feed_dict=feed_dict)
+        return pre
+    
