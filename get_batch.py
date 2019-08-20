@@ -8,7 +8,7 @@ import random
 
 batch_size=64
 sequence_length=128
-num_classes=6
+num_classes=2
 
 class Batch():
     def __init__(self):
@@ -51,6 +51,7 @@ def getbatch():
     w2n=json.load(open('datas/w2n.json'))
     fin=open('datas/train.txt',encoding='utf-8',errors='ignore')
     trains=fin.readlines()
+    random.shuffle(trains)
     for i in range(0,len(trains),64):
         ed=min(len(trains),i+64)
         part=trains[i:ed]

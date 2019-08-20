@@ -16,31 +16,32 @@ class textCNN():
             else:
                 self.embedding=tf.get_variable("embedding",initializer=w2v.vectors.astype(np.float32))
             self.embedded=tf.nn.embedding_lookup(self.embedding,self.input_x)
-        
+        self.embedded=tf.reshape(self.embedded,[-1,flags.sequence_length,flags.embedding_dim,1])
         conv_outs=[]
         for i,filter_size in enumerate(filter_sizes):
             with tf.variable_scope("conv-%d" % i):
-                h=self.conv2d(self.word_embedded,[filter_size,flags.embedding_dim,1,flags.featuremaps],"convolution-%d" % i,tf.nn.relu)
+                h=self.conv2d(self.embedded,[filter_size,flags.embedding_dim,1,flags.featuremaps],"convolution-%d" % i,tf.nn.relu)
                 output=tf.nn.max_pool(h,ksize=[1,flags.sequence_length-filter_size+1,1,1],strides=[1,1,1,1],padding='VALID') #[batch_size,1,1,featuremaps]
                 conv_outs.append(output)
         conv_output=tf.nn.dropout(tf.concat(conv_outs,-1),self.keep_prob) #[batch_size,1,1,featuremaps*len(filter_sizes)]
         self.conv_out=tf.reshape(conv_output,[-1,flags.featuremaps*len(filter_sizes)])
 
         with tf.name_scope("output"):
-            wout=tf.Variable(tf.random_normal([flags.featuremaps*len(filter_sizes),flags.num_classes],dtype=tf.float32))
-            bout=tf.Variable(tf.constant(0.1),shape=[flags.num_classes])
+            wout=tf.get_variable("weight",shape=[flags.featuremaps*len(filter_sizes),flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            bout=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
             self.out=tf.nn.softmax(tf.nn.xw_plus_b(self.conv_out,wout,bout))
             self.pres=tf.argmax(self.out,1)
         
         self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.out))
-        self.accuracy=tf.equal(self.pres,tf.argmax(self.input_y,1))
+        self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pres,tf.argmax(self.input_y,1)),tf.float32))
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
+        self.saver=tf.train.Saver(tf.global_variables())
 
     def conv2d(self,input,shape,scope_name,activation_function=None):
         with tf.variable_scope(scope_name):
             W=tf.get_variable("filter",shape,initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable("bias",shape[-1],initializer=tf.zeros_initializer())
-            out=tf.nn.conv2d(input,W,strids=[1,1,1,1],padding='VALID')+b
+            out=tf.nn.conv2d(input,W,strides=[1,1,1,1],padding='VALID')+b
             if not activation_function:
                 return activation_function(W)
             else:
@@ -50,8 +51,8 @@ class textCNN():
         feed_dict={self.input_x:batch.input_x,
                    self.input_y:batch.input_y,
                    self.keep_prob:0.5}
-        _,loss=sess.run([self.train_op,self.loss],feed_dict=feed_dict)
-        return loss
+        _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
+        return loss,acc
     
     def eval(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
@@ -92,11 +93,12 @@ class bilstm():
         self.bi_out=tf.reshape(self.bi_out,[-1,hiddensizes[-1]*2])
         with tf.name_scope("softmax"):
             W=tf.get_variable("W",shape=[hiddensizes[-1]*2,flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            W=tf.nn.dropout(W,self.keep_prob)
             b=tf.get_variable("b",shape=[flags.num_classes],initializer=tf.zeros_initializer())
             self.out=tf.nn.softmax(tf.nn.xw_plus_b(self.bi_out,W,b))
         self.pre=tf.argmax(self.out,1)
         self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.out))
-        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
+        self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
         correct_predictions=tf.equal(self.pre,tf.argmax(self.input_y,-1))
         self.accuracy=tf.reduce_mean(tf.cast(correct_predictions,tf.float32))
         self.saver=tf.train.Saver(tf.global_variables())
@@ -147,7 +149,7 @@ class bilstm_attention():
         with tf.name_scope("attention"):
             H=self.bilstm_out[0]+self.bilstm_out[1] #[batch_size,sequence_length,hiddensizes[-1]]
             M=tf.reshape(tf.tanh(H),[-1,hiddensizes[-1]])
-            W=tf.get_variable("weigths",shape=[hiddensizes[-1],],initializer=tf.contrib.layers.xavier_initializer())
+            W=tf.get_variable("weigths",shape=[hiddensizes[-1],1],initializer=tf.contrib.layers.xavier_initializer())
             alpha=tf.reshape(tf.matmul(M,W),[-1,flags.sequence_length])
             alpha=tf.nn.softmax(alpha) #[batch_size*sequence_length,1]
             alpha=tf.reshape(alpha,[-1,1,flags.sequence_length])
@@ -155,14 +157,16 @@ class bilstm_attention():
             self.hstar=tf.reshape(tf.tanh(r),[-1,hiddensizes[-1]])
         
         with tf.name_scope("classifying"):
-            W=tf.get_variable("weights",shape=[hiddensizes[-1],flags.num_classes],initializer=tf.contrib.xavier_initializer())
+            W=tf.get_variable("weights",shape=[hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
-            self.out=tf.nn.softmax(tf.matmul(self.hstar,W),b)
+            self.out=tf.nn.softmax(tf.matmul(self.hstar,W)+b)
             self.pre=tf.argmax(self.out,-1)
-            self.loss=tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.out)
-            self.accuracy=tf.equal(self.pre,tf.argmax(self.input_y))
+            self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.out))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.argmax(self.input_y,-1)),tf.float32))
+        self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
+        self.saver=tf.train.Saver(tf.global_variables())
         
-    def train_op(self,sess,batch):
+    def train(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.input_y:batch.input_y,
                    self.keep_prob:0.5}
