@@ -268,7 +268,7 @@ class transformer():
                 losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
                 
             self.loss = tf.reduce_mean(losses) + flags.l2RegLambda * l2Loss
-            self.accurcy=tf.equal(self.predictions,tf.argmax(self.inputY,-1))
+            self.accurcy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.argmax(self.inputY,-1)),tf.float32))
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
             
     def _layerNormalization(self, inputs, scope="layerNorm"):
@@ -420,7 +420,7 @@ class transformer():
                    self.inputY:batch.input_y,
                    self.embeddedPosition:batch.position,
                    self.dropoutKeepProb:0.5}
-        _,loss=sess.run([self.train_op,self.loss],feed_dict=feed_dict)
+        _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
         return loss
     
     def dev(self,sess,batch):
