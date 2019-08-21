@@ -6,14 +6,15 @@ import json
 import jieba
 import random
 
-batch_size=64
-sequence_length=128
+batch_size=128
+max_sequence_length=128
 num_classes=2
 
 class Batch():
     def __init__(self):
         self.input_x=[]
         self.input_y=[]
+        self.sequence_length=[] #the actual lengths for each of the sequences of input_x in the batch
         self.position=[]
     
 def predata():
@@ -43,7 +44,7 @@ def predata():
         fout.writelines(dev)
         return length
     
-def getbatch():
+def getbatch(batch_size=batch_size,max_sequence_length=max_sequence_length):
     '''
     batch_size:64, sequence_length:128
     '''
@@ -52,8 +53,8 @@ def getbatch():
     fin=open('datas/train.txt',encoding='utf-8',errors='ignore')
     trains=fin.readlines()
     random.shuffle(trains)
-    for i in range(0,len(trains),64):
-        ed=min(len(trains),i+64)
+    for i in range(0,len(trains),batch_size):
+        ed=min(len(trains),i+batch_size)
         part=trains[i:ed]
         batch=Batch()
         for line in part:
@@ -65,10 +66,12 @@ def getbatch():
                 if word == ' ' or word == '':
                     continue
                 inputx.append(w2n.get(word,0))
-                if len(inputx)>=sequence_length:
+                if len(inputx)>=max_sequence_length:
+                    batch.sequence_length.append(max_sequence_length)
                     break
-            if len(inputx)<sequence_length:
-                inputx.extend([0]*(sequence_length-len(inputx)))
+            if len(inputx)<max_sequence_length:
+                batch.sequence_length.append(len(inputx))
+                inputx.extend([0]*(max_sequence_length-len(inputx)))
             
             inputy=[0]*num_classes
             inputy[label]=1

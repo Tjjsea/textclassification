@@ -161,9 +161,9 @@ class bilstm_attention():
         with tf.name_scope("classifying"):
             W=tf.get_variable("weights",shape=[hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
-            self.out=tf.nn.softmax(tf.matmul(self.hstar,W)+b)
-            self.pre=tf.argmax(self.out,-1)
-            self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.out))
+            self.scores=tf.matmul(self.hstar,W)+b
+            self.pre=tf.argmax(self.scores,-1)
+            self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
             self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.argmax(self.input_y,-1)),tf.float32))
         self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
@@ -482,3 +482,23 @@ class ELMo():
             self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.argmax(self.input_y,-1)),tf.float32))
         self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
+
+    def train(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
+                   self.keep_prob:0.5}
+        _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
+        return loss,acc
+    
+    def eval(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
+                   self.keep_prob:0.5}
+        accuracy=sess.run(self.accuracy,feed_dict=feed_dict)
+        return accuracy
+    
+    def demo(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.keep_prob:0.5}
+        pre=sess.run(self.pres)
+        return pre
