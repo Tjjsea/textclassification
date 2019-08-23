@@ -7,7 +7,7 @@ import jieba
 import random
 
 batch_size=128
-max_sequence_length=128
+max_sequence_length=140
 num_classes=2
 
 class Batch():
@@ -49,8 +49,8 @@ def getbatch(batch_size=batch_size,max_sequence_length=max_sequence_length):
     batch_size:64, sequence_length:128
     '''
     batches=[]
-    w2n=json.load(open('datas/w2n.json'))
-    fin=open('datas/train.txt',encoding='utf-8',errors='ignore')
+    w2n=json.load(open('data/w2n.json',encoding='utf-8'))
+    fin=open('data/train.txt',encoding='utf-8')
     trains=fin.readlines()
     random.shuffle(trains)
     for i in range(0,len(trains),batch_size):
@@ -58,9 +58,9 @@ def getbatch(batch_size=batch_size,max_sequence_length=max_sequence_length):
         part=trains[i:ed]
         batch=Batch()
         for line in part:
-            label=int(line[0]) #类别不超过10
-            line=line.strip()[1:]
+            line=line.strip()
             line=line.split(' ')
+            label=int(line[0])
             inputx=[]
             for word in line:
                 if word == ' ' or word == '':
@@ -77,16 +77,16 @@ def getbatch(batch_size=batch_size,max_sequence_length=max_sequence_length):
             inputy[label]=1
             batch.input_x.append(inputx)
             batch.input_y.append(inputy)
-        batches.append(batch)
-    return batches
-
-                
+        yield batch
+        #batches.append(batch)
+    #return batches
 
 
 if __name__=="__main__":
-    batches=getbatch()
-    batch=batches[0]
-    x=batch.input_x
-    y=batch.input_y
-    for i in x:
-        print(i)
+    for nextbatch in getbatch():
+        x=nextbatch.input_x
+        y=nextbatch.input_y
+        sl=nextbatch.sequence_length
+        print(x[0])
+        print(y[1])
+        print(sl)

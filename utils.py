@@ -76,6 +76,9 @@ def trainw2v():
     model.save('model/word2vec.txt')
 
 def getembedding():
+    '''
+    根据词表与w2v获取embedding矩阵的权重
+    '''
     model=Word2Vec.load('model/word2vec.txt')
     w2n=json.load(open('data/w2n.json'))
     sortw2n=sorted(w2n.items(),key=lambda x:x[1])
@@ -89,10 +92,24 @@ def getembedding():
             wvec=model[word]
         vecs.append(wvec)
     vecs=np.array(vecs)
-    np.savetxt('data/w2v.txt',vecs)
+    np.savetxt('data/embedding.txt',vecs)
 
-
+def count():
+    fin=open('data/test.txt',encoding='utf-8')
+    datas=fin.readlines()
+    length=[]
+    for line in datas:
+        line=line.strip()
+        line=line.split(' ')[1:]
+        length.append(len(line))
+    maxlength=max(length)
+    bucket=[0]*(maxlength+1)
+    for i in length:
+        bucket[i]+=1
+    for i in range(len(bucket)):
+        print(i,bucket[i])
 
 if __name__=="__main__":
     #trainw2v()
-    getembedding()
+    #getembedding()
+    count()
