@@ -7,8 +7,9 @@ import tensorflow as tf
 class textCNN():
     def __init__(self,flags,filter_sizes,w2v):
         self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
-        self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
+        self.input_y=tf.placeholder(tf.int32,[None,None],name="input_y")
         self.keep_prob=tf.placeholder(tf.float32,name="keep_prob")
+        self.l2Loss=tf.constant(0.0)
         
         with tf.name_scope("word-embedding"):
             if w2v is None:
@@ -30,14 +31,17 @@ class textCNN():
         with tf.name_scope("output"):
             wout=tf.get_variable("weight",shape=[flags.featuremaps*len(filter_sizes),flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             bout=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
+            self.l2Loss+=tf.nn.l2_loss(wout)
             self.scores=tf.nn.xw_plus_b(self.conv_out,wout,bout)
-            self.out=tf.nn.relu(self.scores)
-            self.pres=tf.argmax(self.scores,1)
-        
-        self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
-        #self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=tf.cast(self.input_y,dtype=tf.float32),logits=self.out))
-        self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pres,tf.argmax(self.input_y,1)),tf.float32))
-        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
+            if flags.num_classes==1:
+                self.pre=tf.cast(tf.greater_equal(self.scores,0.0),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.scores,labels=tf.reshape(tf.cast(tf.argmax(self.input_y,-1),dtype=tf.float32),[-1,1])))
+            else:
+                self.pre=tf.argmax(self.scores,-1)
+                self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
+            self.loss+=(flags.l2RegLambda*self.l2Loss)
+        self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
 
     def conv2d(self,input,shape,scope_name,activation_function=None):

@@ -8,7 +8,7 @@ import random
 
 batch_size=128
 max_sequence_length=140
-num_classes=2
+num_classes=1
 
 class Batch():
     def __init__(self):
@@ -44,18 +44,24 @@ def predata():
         fout.writelines(dev)
         return length
     
-def getbatch(batch_size=batch_size,max_sequence_length=max_sequence_length):
+def getbatch(mode,batch_size=batch_size,max_sequence_length=max_sequence_length):
     '''
-    batch_size:64, sequence_length:128
+    get batch from ch,en
     '''
+    if mode=="train":
+        fin=open('data/train.txt',encoding='utf-8')
+        datas=fin.readlines()
+    else:
+        fin=open('data/dev.txt',encoding='utf-8')
+        datas=fin.readlines()
+        
     batches=[]
     w2n=json.load(open('data/w2n.json',encoding='utf-8'))
     fin=open('data/train.txt',encoding='utf-8')
-    trains=fin.readlines()
-    random.shuffle(trains)
-    for i in range(0,len(trains),batch_size):
-        ed=min(len(trains),i+batch_size)
-        part=trains[i:ed]
+    random.shuffle(datas)
+    for i in range(0,len(datas),batch_size):
+        ed=min(len(datas),i+batch_size)
+        part=datas[i:ed]
         batch=Batch()
         for line in part:
             line=line.strip()
@@ -72,8 +78,10 @@ def getbatch(batch_size=batch_size,max_sequence_length=max_sequence_length):
             if len(inputx)<max_sequence_length:
                 batch.sequence_length.append(len(inputx))
                 inputx.extend([0]*(max_sequence_length-len(inputx)))
-            
-            inputy=[0]*num_classes
+            if num_classes==1:
+                inputy=[0]*2
+            else:
+                inputy=[0]*num_classes
             inputy[label]=1
             batch.input_x.append(inputx)
             batch.input_y.append(inputy)
