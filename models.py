@@ -137,6 +137,9 @@ class bilstm_attention():
         self.keep_prob=tf.placeholder(tf.float32, name="keep_prob")
         self.l2Loss=tf.constant(0.0)
 
+        self.flags=flags
+        self.hiddensizes=hiddensizes
+
         with tf.name_scope("word-embedding"):
             if w2v is None:
                 self.embedding=tf.Variable(tf.random_uniform([flags.vocab_size,flags.embedding_dim],-1.0,1.0))
@@ -154,6 +157,7 @@ class bilstm_attention():
                     binput=tf.concat(outputs,-1)
             self.bilstm_out=tf.split(binput,2,-1)
         
+        '''
         with tf.name_scope("attention"):
             H=self.bilstm_out[0]+self.bilstm_out[1] #[batch_size,sequence_length,hiddensizes[-1]]
             M=tf.reshape(tf.tanh(H),[-1,hiddensizes[-1]])
@@ -163,6 +167,11 @@ class bilstm_attention():
             alpha=tf.reshape(alpha,[-1,1,flags.sequence_length])
             r=tf.matmul(alpha,H) #[batch_size,1,hiddensizes[-1]]
             self.hstar=tf.reshape(tf.tanh(r),[-1,hiddensizes[-1]])
+        '''
+
+        with tf.name_scope("attention"):
+            H=self.bilstm_out[0]+self.bilstm_out[1] #[batch_size,sequence_length,hiddensizes[-1]]
+            self.hstar=self.attention(H)
         
         with tf.name_scope("classifying"):
             W=tf.get_variable("weights",shape=[hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
@@ -178,7 +187,7 @@ class bilstm_attention():
                 self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
             self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
             self.loss+=(flags.l2RegLambda*self.l2Loss)
-        self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
+        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
         
     def train(self,sess,batch):
@@ -204,6 +213,42 @@ class bilstm_attention():
         pre=sess.run(self.pres)
         return pre
     
+    def attention(self, H):
+        """
+        利用Attention机制得到句子的向量表示
+        """
+        # 获得最后一层LSTM的神经元数量
+        hiddenSize = self.hiddensizes[-1]
+        
+        # 初始化一个权重向量，是可训练的参数
+        W = tf.Variable(tf.random_normal([hiddenSize], stddev=0.1))
+        
+        # 对Bi-LSTM的输出用激活函数做非线性转换
+        M = tf.tanh(H)
+        
+        # 对W和M做矩阵运算，W=[batch_size, time_step, hidden_size]，计算前做维度转换成[batch_size * time_step, hidden_size]
+        # newM = [batch_size, time_step, 1]，每一个时间步的输出由向量转换成一个数字
+        newM = tf.matmul(tf.reshape(M, [-1, hiddenSize]), tf.reshape(W, [-1, 1]))
+        
+        # 对newM做维度转换成[batch_size, time_step]
+        restoreM = tf.reshape(newM, [-1, self.flags.sequence_length])
+        
+        # 用softmax做归一化处理[batch_size, time_step]
+        self.alpha = tf.nn.softmax(restoreM)
+        
+        # 利用求得的alpha的值对H进行加权求和，用矩阵运算直接操作
+        r = tf.matmul(tf.transpose(H, [0, 2, 1]), tf.reshape(self.alpha, [-1, self.flags.sequence_length, 1]))
+        
+        # 将三维压缩成二维sequeezeR=[batch_size, hidden_size]
+        sequeezeR = tf.reshape(r, [-1, hiddenSize])
+        
+        sentenceRepren = tf.tanh(sequeezeR)
+        
+        # 对Attention的输出可以做dropout处理
+        output = tf.nn.dropout(sentenceRepren, self.keep_prob)
+        
+        return output
+    
 class charCNN():
     def __init__(self,flags):
         self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
@@ -217,7 +262,7 @@ class transformer():
 
         # 定义模型的输入
         self.inputX = tf.placeholder(tf.int32, [None, flags.sequence_length], name="inputX")
-        self.inputY = tf.placeholder(tf.int32, [None], name="inputY")
+        self.inputY = tf.placeholder(tf.int32, [None,None], name="inputY")
         
         self.dropoutKeepProb = tf.placeholder(tf.float32, name="dropoutKeepProb")
         self.embeddedPosition = tf.placeholder(tf.float32, [None, flags.sequence_length, flags.sequence_length], name="embeddedPosition") #one-hot
@@ -236,9 +281,9 @@ class transformer():
             else:
                 # 利用预训练的词向量初始化词嵌入矩阵
                 self.embedding=tf.Variable(tf.cast(w2v, dtype=tf.float32, name="word2vec") ,name="W")
-                # 利用词嵌入矩阵将输入的数据中的词转换成词向量，维度[batch_size, sequence_length, embedding_size]
-                self.embedded = tf.nn.embedding_lookup(self.embedding, self.inputX)
-                self.embeddedWords = tf.concat([self.embedded, self.embeddedPosition], -1)
+            # 利用词嵌入矩阵将输入的数据中的词转换成词向量，维度[batch_size, sequence_length, embedding_size]
+            self.embedded = tf.nn.embedding_lookup(self.embedding, self.inputX)
+            self.embeddedwords = tf.concat([self.embedded, self.embeddedPosition], -1)
 
         with tf.name_scope("transformer"):
             self.transinput=self.embeddedwords
@@ -263,31 +308,34 @@ class transformer():
         with tf.name_scope("output"):
             outputW = tf.get_variable(
                 "outputW",
-                shape=[outputSize, flags.numClasses],
+                shape=[outputSize, flags.num_classes],
                 initializer=tf.contrib.layers.xavier_initializer())
             
-            outputB= tf.Variable(tf.constant(0.1, shape=[flags.numClasses]), name="outputB")
+            outputB= tf.Variable(tf.constant(0.1, shape=[flags.num_classes]), name="outputB")
             l2Loss += tf.nn.l2_loss(outputW)
             l2Loss += tf.nn.l2_loss(outputB)
             self.logits = tf.nn.xw_plus_b(outputs, outputW, outputB, name="logits")
             
-            if flags.numClasses == 1:
+            if flags.num_classes == 1:
                 self.predictions = tf.cast(tf.greater_equal(self.logits, 0.0), tf.float32, name="predictions")
-            elif flags.numClasses > 1:
+            elif flags.num_classes > 1:
                 self.predictions = tf.argmax(self.logits, axis=-1, name="predictions")
         
         # 计算二元交叉熵损失
         with tf.name_scope("loss"):
             
-            if flags.numClasses == 1:
-                losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(tf.reshape(self.inputY, [-1, 1]), 
-                                                                                                    dtype=tf.float32))
-            elif flags.numClasses > 1:
-                losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
+            if flags.num_classes == 1:
+                #losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(tf.reshape(self.inputY, [-1, 1]), 
+                #                                                                                    dtype=tf.float32))
+                losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits,labels=tf.reshape(tf.cast(tf.argmax(self.inputY,-1),dtype=tf.float32),[-1,1]))
+            elif flags.num_classes > 1:
+                #losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
+                losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
                 
             self.loss = tf.reduce_mean(losses) + flags.l2RegLambda * l2Loss
-            self.accurcy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.argmax(self.inputY,-1)),tf.float32))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(tf.argmax(self.inputY,-1),tf.float32)),tf.float32))
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
+        self.saver=tf.train.Saver(tf.global_variables())
             
     def _layerNormalization(self, inputs, scope="layerNorm"):
         # LayerNorm层和BN层有所不同
@@ -436,15 +484,15 @@ class transformer():
     def train(self,sess,batch):
         feed_dict={self.inputX:batch.input_x,
                    self.inputY:batch.input_y,
-                   self.embeddedPosition:batch.position,
+                   self.embeddedPosition:batch.transformer_position,
                    self.dropoutKeepProb:0.5}
         _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
-        return loss
+        return loss,acc
     
     def dev(self,sess,batch):
         feed_dict={self.inputX:batch.input_x,
                    self.inputY:batch.input_y,
-                   self.embeddedPosition:batch.position,
+                   self.embeddedPosition:batch.transformer_position,
                    self.dropoutKeepProb:0.5}
         acc=sess.run(self.accuracy,feed_dict=feed_dict)
         return acc
@@ -522,7 +570,7 @@ class ELMo():
 class HAN():
     def __init__(self,flags,w2v,whiddensizes,shiddensizes):
         self.input_x=tf.placeholder(tf.int32,[None,None,None],name="input_x") #[batch_size,document_length,sentence_length]
-        self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
+        self.input_y=tf.placeholder(tf.int32,[None,None],name="input_y")
         self.keep_prob=tf.placeholder(tf.float32,name="dropout_keep_prob")
         self.l2Loss=tf.constant(0.0)
 
@@ -545,19 +593,19 @@ class HAN():
                     weinput=tf.concat(outputs,-1)
             self.word_encoder=weinput #[batch_size*document_length,sentence_length,whiddensizes[-1]*2]
 
-        with tf.name_scope("word-attention"):
+        with tf.variable_scope("word-attention"):
             h=tf.reshape(self.word_encoder,[-1,whiddensizes[-1]*2])
             W=tf.get_variable(name="weights",shape=[whiddensizes[-1]*2,flags.wt_hidunits],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable(name="bias",shape=[flags.wt_hidunits],initializer=tf.zeros_initializer())
             uw=tf.get_variable(name="Uw",shape=[flags.wt_hidunits,1],initializer=tf.contrib.layers.xavier_initializer())
-            u=tf.tanh(tf.matmul(h,W)+b)
-            u=tf.matmul(u,uw) #[batch_size*document_length*sentence_length,1]
-            u=tf.reshape(u,[-1,flags.document_length,flags.sentence_length])
-            alpha=tf.reshape(tf.softmax(u),[-1,1])
+            #u=tf.tanh(tf.matmul(h,W)+b)
+            #u=tf.matmul(u,uw) #[batch_size*document_length*sentence_length,1]
+            u=tf.reshape(tf.matmul(tf.tanh(tf.matmul(h,W)+b),uw),[-1,flags.document_length,flags.sentence_length])
+            alpha=tf.reshape(tf.nn.softmax(u),[-1,1])
             s=h*alpha #???
             s=tf.reshape(s,[-1,flags.document_length,flags.sentence_length,whiddensizes[-1]*2])
-            s=tf.reduce_sum(s,-1) #[batch_size,document_length,whiddensizes[-1]*2]
-            self.sentence=s
+            #s=tf.reduce_sum(s,-2) #[batch_size,document_length,whiddensizes[-1]*2]
+            self.sentence=tf.reduce_sum(s,-2)
         
         with tf.name_scope("sentence-encoder"):
             seinput=self.sentence
@@ -569,22 +617,22 @@ class HAN():
                     seinput=tf.concat(outputs,-1)
             self.sentence_encoder=seinput #[batch_size,document_length,shiddensizes[-1]*2]
 
-        with tf.name_scope("sentence_attention"):
+        with tf.variable_scope("sentence_attention"):
             sh=tf.reshape(self.sentence_encoder,[-1,shiddensizes[-1]*2])
             W=tf.get_variable(name="weights",shape=[shiddensizes[-1]*2,flags.st_hidunits],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable(name="bias",shape=[flags.st_hidunits],initializer=tf.zeros_initializer())
             us=tf.get_variable(name="Us",shape=[flags.st_hidunits,1],initializer=tf.contrib.layers.xavier_initializer())
-            su=tf.tanh(tf.matmul(sh,W)+b)
-            su=tf.matmul(su,us) #[batch_size*document_length,1]
-            su=tf.reshape(su,[-1,document_length])
-            alpha=tf.softmax(su)
-            alpha=tf.reshape(alpha,[-1,1])
-            v=tf.multiply(alpha,sh) #???
-            v=tf.reshape(v,[-1,flags.document_length,shiddensizes[-1]*2])
-            v=tf.reduce_mean(v,-1) #[batch_size,shiddensizes[-1]*2]
-            self.document=v
+            #su=tf.tanh(tf.matmul(sh,W)+b)
+            #su=tf.matmul(su,us) #[batch_size*document_length,1]
+            su=tf.reshape(tf.matmul(tf.tanh(tf.matmul(sh,W)+b),us),[-1,flags.document_length])
+            #alpha=tf.nn.softmax(su)
+            alpha=tf.reshape(tf.nn.softmax(su),[-1,1])
+            #v=tf.multiply(alpha,sh) #???[batch_size*document_lenth,shiddensizes[-1]*2]
+            v=tf.reshape(tf.multiply(alpha,sh),[-1,flags.document_length,shiddensizes[-1]*2])
+            #v=tf.reduce_sum(v,-2) #[batch_size,shiddensizes[-1]*2]
+            self.document=tf.reduce_sum(v,-2)
         
-        with tf.name_scope("classifying"):
+        with tf.variable_scope("classifying"):
             W=tf.get_variable(name="weights",shape=[shiddensizes[-1]*2,flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable(name="bias",shape=[flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             self.l2Loss+=tf.nn.l2_loss(W)
@@ -598,7 +646,7 @@ class HAN():
                 self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
             self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
             self.loss+=(flags.l2RegLambda*self.l2Loss)
-        self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
+        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
 
     def train(self,sess,batch):

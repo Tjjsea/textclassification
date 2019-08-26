@@ -5,9 +5,10 @@ import os
 import json
 import jieba
 import random
+import numpy as np
 
 batch_size=128
-max_sequence_length=140
+max_sequence_length=128
 num_classes=1
 
 class Batch():
@@ -16,6 +17,7 @@ class Batch():
         self.input_y=[]
         self.sequence_length=[] #the actual lengths for each of the sequences of input_x in the batch
         self.position=[]
+        self.transformer_position=[]
     
 def predata():
     vocabs={"UNK":0}
@@ -68,16 +70,27 @@ def getbatch(mode,batch_size=batch_size,max_sequence_length=max_sequence_length)
             line=line.split(' ')
             label=int(line[0])
             inputx=[]
+            pos=[]
+            count=0
             for word in line:
                 if word == ' ' or word == '':
                     continue
                 inputx.append(w2n.get(word,0))
+                temp=[0]*max_sequence_length
+                temp[count]=1
+                pos.append(temp)
+                count+=1
                 if len(inputx)>=max_sequence_length:
                     batch.sequence_length.append(max_sequence_length)
                     break
+                
             if len(inputx)<max_sequence_length:
                 batch.sequence_length.append(len(inputx))
                 inputx.extend([0]*(max_sequence_length-len(inputx)))
+                for i in range(count,max_sequence_length):
+                    temp=[0]*max_sequence_length
+                    temp[i]=1
+                    pos.append(temp)
             if num_classes==1:
                 inputy=[0]*2
             else:
@@ -85,16 +98,37 @@ def getbatch(mode,batch_size=batch_size,max_sequence_length=max_sequence_length)
             inputy[label]=1
             batch.input_x.append(inputx)
             batch.input_y.append(inputy)
+            batch.transformer_position.append(pos)
         yield batch
         #batches.append(batch)
     #return batches
 
+def han_batch(mode,batch_size=64):
+    if mode=="train":
+        data=json.load(open('ch_en/numtrain.json'))
+    else:
+        data=json.load(open('ch_en/numdev.json'))
+    
+    random.shuffle(data)
+    for i in range(0,len(data),batch_size):
+        ed=min(i+batch_size,len(data))
+        part=data[i:ed]
+        batch=Batch()
+        for line in part:
+            label=int(line[0])
+            document=line[1:]
+            batch.input_x.append(document)
+            if num_classes==1:
+                input_y=[0]*2
+            else:
+                input_y=[0]*num_classes
+            input_y[label]=1
+            batch.input_y.append(input_y)
+        yield batch
 
 if __name__=="__main__":
-    for nextbatch in getbatch():
-        x=nextbatch.input_x
-        y=nextbatch.input_y
-        sl=nextbatch.sequence_length
-        print(x[0])
-        print(y[1])
-        print(sl)
+    for nextbatch in han_batch("train"):
+        x=np.array(nextbatch.input_x,dtype=np.int32)
+        y=np.array(nextbatch.input_y,dtype=np.int32)
+        print(x.shape)
+        print(y.shape)
