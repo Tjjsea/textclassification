@@ -7,8 +7,9 @@ import tensorflow as tf
 class textCNN():
     def __init__(self,flags,filter_sizes,w2v):
         self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
-        self.input_y=tf.placeholder(tf.int32,[None,None],name="input_y")
+        self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
         self.keep_prob=tf.placeholder(tf.float32,name="keep_prob")
+        self.global_step=tf.placeholder(tf.int32,name="global_step")
         self.l2Loss=tf.constant(0.0)
         
         with tf.name_scope("word-embedding"):
@@ -32,16 +33,18 @@ class textCNN():
             wout=tf.get_variable("weight",shape=[flags.featuremaps*len(filter_sizes),flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             bout=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
             self.l2Loss+=tf.nn.l2_loss(wout)
-            self.scores=tf.nn.xw_plus_b(self.conv_out,wout,bout)
+            self.logits=tf.nn.xw_plus_b(self.conv_out,wout,bout)
             if flags.num_classes==1:
-                self.pre=tf.cast(tf.greater_equal(self.scores,0.0),tf.int32,name="predictions")
-                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.scores,labels=tf.reshape(tf.cast(tf.argmax(self.input_y,-1),dtype=tf.float32),[-1,1])))
+                self.predictions=tf.cast(tf.greater_equal(self.logits,0.0),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.input_y, dtype=tf.float32)))
+                
             else:
-                self.pre=tf.argmax(self.scores,-1)
-                self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
+                self.predictions=tf.argmax(self.logits,-1)
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.input_y))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))
             self.loss+=(flags.l2RegLambda*self.l2Loss)
-        self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
+        self.learning_rate=tf.train.exponential_decay(learning_rate=flags.learning_rate,global_step=self.global_step,decay_steps=100,decay_rate=0.9,staircase=True)
+        self.train_op=tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
 
     def conv2d(self,input,shape,scope_name,activation_function=None):
@@ -54,25 +57,26 @@ class textCNN():
             else:
                 return out
     
-    def train(self,sess,batch):
+    def train(self,sess,batch,global_step):
         feed_dict={self.input_x:batch.input_x,
                    self.input_y:batch.input_y,
-                   self.keep_prob:0.5}
+                   self.keep_prob:0.5,
+                   self.global_step:global_step}
         _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
         return loss,acc
     
     def eval(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
-                   self.input_y:batch.input_y,
                    self.keep_prob:0.5}
-        accuracy=sess.run(self.accuracy,feed_dict=feed_dict)
-        return accuracy
+        pre=sess.run(self.predictions,feed_dict=feed_dict)
+        return pre
     
     def demo(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
                    self.keep_prob:0.5}
-        pre=sess.run(self.pres)
-        return pre
+        pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
 
 class bilstm():
     def __init__(self,flags,hiddensizes,w2v):
@@ -132,7 +136,7 @@ class bilstm():
 class bilstm_attention():
     def __init__(self,flags,w2v,hiddensizes):
         self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
-        self.input_y=tf.placeholder(tf.int32,[None,None],name="input_y")
+        self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
         self.sequence_length=tf.placeholder(tf.int32,[None],name="sequence_length")
         self.keep_prob=tf.placeholder(tf.float32, name="keep_prob")
         self.l2Loss=tf.constant(0.0)
@@ -177,15 +181,15 @@ class bilstm_attention():
             W=tf.get_variable("weights",shape=[hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
             self.l2Loss+=tf.nn.l2_loss(W)
-            self.scores=tf.matmul(self.hstar,W)+b
+            self.logits=tf.matmul(self.hstar,W)+b
 
             if flags.num_classes==1:
-                self.pre=tf.cast(tf.greater_equal(self.scores,0.0),tf.int32,name="predictions")
-                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.scores,labels=tf.reshape(tf.cast(tf.argmax(self.input_y,-1),dtype=tf.float32),[-1,1])))
+                self.predictions=tf.cast(tf.greater_equal(self.logits,0.0),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits,labels=tf.cast(self.input_y,dtype=tf.float32)))
             else:
-                self.pre=tf.argmax(self.scores,-1)
-                self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
+                self.pre=tf.argmax(self.logits,-1)
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits,labels=self.input_y))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))
             self.loss+=(flags.l2RegLambda*self.l2Loss)
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
@@ -208,10 +212,11 @@ class bilstm_attention():
     
     def demo(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
                    self.sequence_length:batch.sequence_length,
                    self.keep_prob:0.5}
-        pre=sess.run(self.pres)
-        return pre
+        pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
     
     def attention(self, H):
         """
@@ -317,7 +322,7 @@ class transformer():
             self.logits = tf.nn.xw_plus_b(outputs, outputW, outputB, name="logits")
             
             if flags.num_classes == 1:
-                self.predictions = tf.cast(tf.greater_equal(self.logits, 0.0), tf.float32, name="predictions")
+                self.predictions = tf.cast(tf.greater_equal(self.logits, 0.0), tf.int32, name="predictions")
             elif flags.num_classes > 1:
                 self.predictions = tf.argmax(self.logits, axis=-1, name="predictions")
         
@@ -325,15 +330,13 @@ class transformer():
         with tf.name_scope("loss"):
             
             if flags.num_classes == 1:
-                #losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(tf.reshape(self.inputY, [-1, 1]), 
-                #                                                                                    dtype=tf.float32))
-                losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits,labels=tf.reshape(tf.cast(tf.argmax(self.inputY,-1),dtype=tf.float32),[-1,1]))
+                losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.inputY, dtype=tf.float32))
             elif flags.num_classes > 1:
                 #losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
                 losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
                 
             self.loss = tf.reduce_mean(losses) + flags.l2RegLambda * l2Loss
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(tf.argmax(self.inputY,-1),tf.float32)),tf.float32))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.inputY,tf.int32)),tf.float32))
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
             
@@ -491,18 +494,18 @@ class transformer():
     
     def dev(self,sess,batch):
         feed_dict={self.inputX:batch.input_x,
-                   self.inputY:batch.input_y,
                    self.embeddedPosition:batch.transformer_position,
-                   self.dropoutKeepProb:0.5}
-        acc=sess.run(self.accuracy,feed_dict=feed_dict)
-        return acc
-    
-    def demo(self,sess,batch):
-        feed_dict={self.inputX:batch.input_x,
-                   self.embeddedPosition:batch.position,
                    self.dropoutKeepProb:0.5}
         pre=sess.run(self.predictions,feed_dict=feed_dict)
         return pre
+    
+    def demo(self,sess,batch):
+        feed_dict={self.inputX:batch.input_x,
+                   self.inputY:batch.input_y,
+                   self.embeddedPosition:batch.transformer_position,
+                   self.dropoutKeepProb:0.5}
+        pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
     
 class ELMo():
     def __init__(self,flags,hiddensizes):
@@ -640,11 +643,11 @@ class HAN():
 
             if flags.num_classes==1:
                 self.pre=tf.cast(tf.greater_equal(self.scores,0.0),tf.int32,name="predictions")
-                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.scores,labels=tf.reshape(tf.cast(tf.argmax(self.input_y,-1),dtype=tf.float32),[-1,1])))
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.scores,labels=tf.cast(self.input_y,dtype=tf.float32)))
             else:
                 self.pre=tf.argmax(self.scores,-1)
-                self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.scores))
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.scores,labels=self.input_y))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))
             self.loss+=(flags.l2RegLambda*self.l2Loss)
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
@@ -665,8 +668,119 @@ class HAN():
     
     def demo(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
                    self.keep_prob:0.5}
-        pre=sess.run(self.pres)
-        return pre
+        pre,acc=sess.run([self.pre,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
 
+class TextCNN(object):
+    """
+    Text CNN 用于文本分类
+    """
+    def __init__(self, config, filterSizes):
 
+        # 定义模型的输入
+        self.inputX = tf.placeholder(tf.int32, [None, config.sequence_length], name="inputX")
+        self.inputY = tf.placeholder(tf.int32, [None,config.num_classes], name="inputY")
+        
+        self.dropoutKeepProb = tf.placeholder(tf.float32, name="dropoutKeepProb")
+        
+        # 定义l2损失
+        l2Loss = tf.constant(0.0)
+        
+        # 词嵌入层
+        with tf.name_scope("embedding"):
+
+            # 利用预训练的词向量初始化词嵌入矩阵
+            self.W = tf.Variable(tf.random_uniform([config.vocab_size,config.embedding_dim],-1.0,1.0))
+            # 利用词嵌入矩阵将输入的数据中的词转换成词向量，维度[batch_size, sequence_length, embedding_size]
+            self.embeddedWords = tf.nn.embedding_lookup(self.W, self.inputX)
+            # 卷积的输入是思维[batch_size, width, height, channel]，因此需要增加维度，用tf.expand_dims来增大维度
+            self.embeddedWordsExpanded = tf.expand_dims(self.embeddedWords, -1)
+
+        # 创建卷积和池化层
+        pooledOutputs = []
+        # 有三种size的filter，3， 4， 5，textCNN是个多通道单层卷积的模型，可以看作三个单层的卷积模型的融合
+        for i, filterSize in enumerate(filterSizes):
+            with tf.name_scope("conv-maxpool-%s" % filterSize):
+                # 卷积层，卷积核尺寸为filterSize * embeddingSize，卷积核的个数为numFilters
+                # 初始化权重矩阵和偏置
+                filterShape = [filterSize, config.embedding_dim, 1, config.featuremaps]
+                W = tf.Variable(tf.truncated_normal(filterShape, stddev=0.1), name="W")
+                b = tf.Variable(tf.constant(0.1, shape=[config.featuremaps]), name="b")
+                conv = tf.nn.conv2d(
+                    self.embeddedWordsExpanded,
+                    W,
+                    strides=[1, 1, 1, 1],
+                    padding="VALID",
+                    name="conv")
+                
+                # relu函数的非线性映射
+                h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu")
+                
+                # 池化层，最大池化，池化是对卷积后的序列取一个最大值
+                pooled = tf.nn.max_pool(
+                    h,
+                    ksize=[1, config.sequence_length - filterSize + 1, 1, 1],  # ksize shape: [batch, height, width, channels]
+                    strides=[1, 1, 1, 1],
+                    padding='VALID',
+                    name="pool")
+                pooledOutputs.append(pooled)  # 将三种size的filter的输出一起加入到列表中
+
+        # 得到CNN网络的输出长度
+        numFiltersTotal = config.featuremaps * len(filterSizes)
+        
+        # 池化后的维度不变，按照最后的维度channel来concat
+        self.hPool = tf.concat(pooledOutputs, 3)
+        
+        # 摊平成二维的数据输入到全连接层
+        self.hPoolFlat = tf.reshape(self.hPool, [-1, numFiltersTotal])
+
+        # dropout
+        with tf.name_scope("dropout"):
+            self.hDrop = tf.nn.dropout(self.hPoolFlat, self.dropoutKeepProb)
+       
+        # 全连接层的输出
+        with tf.name_scope("output"):
+            outputW = tf.get_variable(
+                "outputW",
+                shape=[numFiltersTotal, config.num_classes],
+                initializer=tf.contrib.layers.xavier_initializer())
+            outputB= tf.Variable(tf.constant(0.1, shape=[config.num_classes]), name="outputB")
+            l2Loss += tf.nn.l2_loss(outputW)
+            l2Loss += tf.nn.l2_loss(outputB)
+            self.logits = tf.nn.xw_plus_b(self.hDrop, outputW, outputB, name="logits")
+            if config.num_classes == 1:
+                self.predictions = tf.cast(tf.greater_equal(self.logits, 0.0), tf.int32, name="predictions")
+            elif config.num_classes > 1:
+                self.predictions = tf.argmax(self.logits, axis=-1, name="predictions")
+            
+            print(self.predictions)
+        
+        # 计算二元交叉熵损失
+        with tf.name_scope("loss"):
+            
+            if config.num_classes == 1:
+                #losses=tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits,labels=tf.reshape(tf.cast(tf.argmax(self.inputY,-1),dtype=tf.float32),[-1,1]))
+                losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.inputY, dtype=tf.float32))
+            elif config.num_classes > 1:
+                losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
+                
+            self.loss = tf.reduce_mean(losses) + config.l2RegLambda * l2Loss
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.inputY,dtype=tf.int32)),tf.float32))
+        self.train_op=tf.train.AdamOptimizer(config.learning_rate).minimize(self.loss)
+        self.saver=tf.train.Saver(tf.global_variables())
+
+    def train(self,sess,batch):
+        feed_dict={self.inputX:batch.input_x,
+                   self.inputY:batch.input_y,
+                   self.dropoutKeepProb:0.5}
+        _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
+        return loss,acc
+    
+    def demo(self,sess,batch):
+        feed_dict={self.inputX:batch.input_x,
+                   self.inputY:batch.input_y,
+                   self.dropoutKeepProb:0.5}
+        pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
