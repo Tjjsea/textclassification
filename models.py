@@ -567,7 +567,7 @@ class ELMo():
     def demo(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.keep_prob:0.5}
-        pre=sess.run(self.pres)
+        pre=sess.run(self.pres,feed_dict=feed_dict)
         return pre
     
 class HAN():
@@ -576,6 +576,8 @@ class HAN():
         self.input_y=tf.placeholder(tf.int32,[None,None],name="input_y")
         self.keep_prob=tf.placeholder(tf.float32,name="dropout_keep_prob")
         self.l2Loss=tf.constant(0.0)
+        
+        #tf.reset_default_graph()
 
         with tf.name_scope("word-embedding"):
             if w2v is None:
@@ -605,6 +607,7 @@ class HAN():
             #u=tf.matmul(u,uw) #[batch_size*document_length*sentence_length,1]
             u=tf.reshape(tf.matmul(tf.tanh(tf.matmul(h,W)+b),uw),[-1,flags.document_length,flags.sentence_length])
             alpha=tf.reshape(tf.nn.softmax(u),[-1,1])
+            self.word_attention=tf.reshape(alpha,[-1,flags.document_length,flags.sentence_length])
             s=h*alpha #???
             s=tf.reshape(s,[-1,flags.document_length,flags.sentence_length,whiddensizes[-1]*2])
             #s=tf.reduce_sum(s,-2) #[batch_size,document_length,whiddensizes[-1]*2]
@@ -630,6 +633,7 @@ class HAN():
             su=tf.reshape(tf.matmul(tf.tanh(tf.matmul(sh,W)+b),us),[-1,flags.document_length])
             #alpha=tf.nn.softmax(su)
             alpha=tf.reshape(tf.nn.softmax(su),[-1,1])
+            self.sentence_attention=tf.reshape(alpha,[-1,flags.document_length])
             #v=tf.multiply(alpha,sh) #???[batch_size*document_lenth,shiddensizes[-1]*2]
             v=tf.reshape(tf.multiply(alpha,sh),[-1,flags.document_length,shiddensizes[-1]*2])
             #v=tf.reduce_sum(v,-2) #[batch_size,shiddensizes[-1]*2]
@@ -651,6 +655,7 @@ class HAN():
             self.loss+=(flags.l2RegLambda*self.l2Loss)
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
+        #tf.get_variable_scope().reuse_variables()
 
     def train(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
@@ -672,6 +677,18 @@ class HAN():
                    self.keep_prob:0.5}
         pre,acc=sess.run([self.pre,self.accuracy],feed_dict=feed_dict)
         return pre,acc
+    
+    def predict(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.keep_prob:0.5}
+        predictions=sess.run(self.pre,feed_dict=feed_dict)
+        return predictions
+    
+    def get_attention(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.keep_prob:0.5}
+        word_attention,sentence_attention=sess.run([self.word_attention,self.sentence_attention],feed_dict=feed_dict)
+        return word_attention,sentence_attention
 
 class TextCNN(object):
     """
