@@ -5,11 +5,10 @@ import numpy as np
 import tensorflow as tf
 
 class textCNN():
-    def __init__(self,flags,filter_sizes,w2v):
+    def __init__(self,flags,w2v):
         self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
         self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
         self.keep_prob=tf.placeholder(tf.float32,name="keep_prob")
-        self.global_step=tf.placeholder(tf.int32,name="global_step")
         self.l2Loss=tf.constant(0.0)
         
         with tf.name_scope("word-embedding"):
@@ -20,31 +19,30 @@ class textCNN():
             self.embedded=tf.nn.embedding_lookup(self.embedding,self.input_x)
         self.embedded=tf.reshape(self.embedded,[-1,flags.sequence_length,flags.embedding_dim,1])
         conv_outs=[]
-        for i,filter_size in enumerate(filter_sizes):
+        for i,filter_size in enumerate(flags.filter_sizes):
             with tf.variable_scope("conv-%d" % i):
                 h=self.conv2d(self.embedded,[filter_size,flags.embedding_dim,1,flags.featuremaps],"convolution-%d" % i,tf.nn.relu)
                 output=tf.nn.max_pool(h,ksize=[1,flags.sequence_length-filter_size+1,1,1],strides=[1,1,1,1],padding='VALID') #[batch_size,1,1,featuremaps]
                 conv_outs.append(output)
         conv_output=tf.concat(conv_outs,-1) #[batch_size,1,1,featuremaps*len(filter_sizes)]
-        conv_out=tf.reshape(conv_output,[-1,flags.featuremaps*len(filter_sizes)])
+        conv_out=tf.reshape(conv_output,[-1,flags.featuremaps*len(flags.filter_sizes)])
         self.conv_out=tf.nn.dropout(conv_out,self.keep_prob)
 
         with tf.name_scope("output"):
-            wout=tf.get_variable("weight",shape=[flags.featuremaps*len(filter_sizes),flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            wout=tf.get_variable("weight",shape=[flags.featuremaps*len(flags.filter_sizes),flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             bout=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
             self.l2Loss+=tf.nn.l2_loss(wout)
             self.logits=tf.nn.xw_plus_b(self.conv_out,wout,bout)
             if flags.num_classes==1:
                 self.predictions=tf.cast(tf.greater_equal(self.logits,0.0),tf.int32,name="predictions")
                 self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.input_y, dtype=tf.float32)))
-                
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))                
             else:
-                self.predictions=tf.argmax(self.logits,-1)
-                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.input_y))
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))
-            self.loss+=(flags.l2RegLambda*self.l2Loss)
-        self.learning_rate=tf.train.exponential_decay(learning_rate=flags.learning_rate,global_step=self.global_step,decay_steps=100,decay_rate=0.9,staircase=True)
-        self.train_op=tf.train.AdamOptimizer(self.learning_rate).minimize(self.loss)
+                self.predictions=tf.cast(tf.argmax(self.logits,-1),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=tf.argmax(self.input_y,-1)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
+        #self.learning_rate=tf.train.exponential_decay(learning_rate=flags.learning_rate,global_step=self.global_step,decay_steps=100,decay_rate=0.9,staircase=True)
+        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
 
     def conv2d(self,input,shape,scope_name,activation_function=None):
@@ -57,21 +55,20 @@ class textCNN():
             else:
                 return out
     
-    def train(self,sess,batch,global_step):
+    def train(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.input_y:batch.input_y,
-                   self.keep_prob:0.5,
-                   self.global_step:global_step}
+                   self.keep_prob:0.5}
         _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
         return loss,acc
     
-    def eval(self,sess,batch):
+    def demo(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.keep_prob:0.5}
         pre=sess.run(self.predictions,feed_dict=feed_dict)
         return pre
     
-    def demo(self,sess,batch):
+    def test(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.input_y:batch.input_y,
                    self.keep_prob:0.5}
@@ -134,7 +131,7 @@ class bilstm():
         return pre
     
 class bilstm_attention():
-    def __init__(self,flags,w2v,hiddensizes):
+    def __init__(self,flags,w2v):
         self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
         self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
         self.sequence_length=tf.placeholder(tf.int32,[None],name="sequence_length")
@@ -142,18 +139,18 @@ class bilstm_attention():
         self.l2Loss=tf.constant(0.0)
 
         self.flags=flags
-        self.hiddensizes=hiddensizes
+        self.hiddensizes=flags.hiddensizes
 
         with tf.name_scope("word-embedding"):
             if w2v is None:
                 self.embedding=tf.Variable(tf.random_uniform([flags.vocab_size,flags.embedding_dim],-1.0,1.0))
             else:
-                self.embedding=tf.Variable(w2v,trainable=False,dtype=tf.float32)
+                self.embedding=tf.Variable(tf.cast(w2v,dtype=tf.float32),trainable=False,dtype=tf.float32)
             self.embedded=tf.nn.embedding_lookup(self.embedding,self.input_x)
 
         with tf.name_scope("bilstm"):
             binput=self.embedded
-            for i,hiddensize in enumerate(hiddensizes):
+            for i,hiddensize in enumerate(flags.hiddensizes):
                 with tf.variable_scope("bilstm-%d" % i):
                     fw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.LSTMCell(hiddensize),output_keep_prob=self.keep_prob)
                     bw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.LSTMCell(hiddensize),output_keep_prob=self.keep_prob)
@@ -163,14 +160,14 @@ class bilstm_attention():
         
         '''
         with tf.name_scope("attention"):
-            H=self.bilstm_out[0]+self.bilstm_out[1] #[batch_size,sequence_length,hiddensizes[-1]]
-            M=tf.reshape(tf.tanh(H),[-1,hiddensizes[-1]])
-            W=tf.get_variable("weigths",shape=[hiddensizes[-1],1],initializer=tf.contrib.layers.xavier_initializer())
+            H=self.bilstm_out[0]+self.bilstm_out[1] #[batch_size,sequence_length,flags.hiddensizes[-1]]
+            M=tf.reshape(tf.tanh(H),[-1,flags.hiddensizes[-1]])
+            W=tf.get_variable("weigths",shape=[flags.hiddensizes[-1],1],initializer=tf.contrib.layers.xavier_initializer())
             alpha=tf.reshape(tf.matmul(M,W),[-1,flags.sequence_length])
             alpha=tf.nn.softmax(alpha) #[batch_size*sequence_length,1]
             alpha=tf.reshape(alpha,[-1,1,flags.sequence_length])
-            r=tf.matmul(alpha,H) #[batch_size,1,hiddensizes[-1]]
-            self.hstar=tf.reshape(tf.tanh(r),[-1,hiddensizes[-1]])
+            r=tf.matmul(alpha,H) #[batch_size,1,flags.hiddensizes[-1]]
+            self.hstar=tf.reshape(tf.tanh(r),[-1,flags.hiddensizes[-1]])
         '''
 
         with tf.name_scope("attention"):
@@ -178,18 +175,19 @@ class bilstm_attention():
             self.hstar=self.attention(H)
         
         with tf.name_scope("classifying"):
-            W=tf.get_variable("weights",shape=[hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            W=tf.get_variable("weights",shape=[flags.hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
             self.l2Loss+=tf.nn.l2_loss(W)
             self.logits=tf.matmul(self.hstar,W)+b
 
             if flags.num_classes==1:
                 self.predictions=tf.cast(tf.greater_equal(self.logits,0.0),tf.int32,name="predictions")
-                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits,labels=tf.cast(self.input_y,dtype=tf.float32)))
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.input_y, dtype=tf.float32)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))                
             else:
-                self.pre=tf.argmax(self.logits,-1)
-                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits,labels=self.input_y))
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))
+                self.predictions=tf.cast(tf.argmax(self.logits,-1),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=tf.argmax(self.input_y,-1)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
             self.loss+=(flags.l2RegLambda*self.l2Loss)
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
@@ -202,21 +200,27 @@ class bilstm_attention():
         _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
         return loss,acc
     
-    def eval(self,sess,batch):
+    def infe(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
-                   self.input_y:batch.input_y,
                    self.sequence_length:batch.sequence_length,
                    self.keep_prob:0.5}
-        accuracy=sess.run(self.accuracy,feed_dict=feed_dict)
-        return accuracy
+        pre,prob=sess.run([self.predictions,self.logits],feed_dict=feed_dict)
+        return pre,prob
     
-    def demo(self,sess,batch):
+    def test(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.input_y:batch.input_y,
                    self.sequence_length:batch.sequence_length,
                    self.keep_prob:0.5}
         pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
         return pre,acc
+    
+    def probability(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.sequence_length:batch.sequence_length,
+                   self.keep_prob:0.5}
+        prob=sess.run(self.logits,feed_dict=feed_dict)
+        return prob
     
     def attention(self, H):
         """
@@ -331,12 +335,16 @@ class transformer():
             
             if flags.num_classes == 1:
                 losses = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.inputY, dtype=tf.float32))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.inputY,dtype=tf.int32)),tf.float32)) 
             elif flags.num_classes > 1:
                 #losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
-                losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.logits, labels=self.inputY)
+                losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=tf.argmax(self.inputY,-1))
+                #self.predictions=tf.cast(tf.argmax(self.logits,-1),tf.int32,name="predictions")
+                #self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=tf.argmax(self.input_y,-1)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(tf.argmax(self.inputY,-1),dtype=tf.int32)),tf.float32))
                 
             self.loss = tf.reduce_mean(losses) + flags.l2RegLambda * l2Loss
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.inputY,tf.int32)),tf.float32))
+            #self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.inputY,tf.int32)),tf.float32))
         self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
             
@@ -487,34 +495,35 @@ class transformer():
     def train(self,sess,batch):
         feed_dict={self.inputX:batch.input_x,
                    self.inputY:batch.input_y,
-                   self.embeddedPosition:batch.transformer_position,
+                   self.embeddedPosition:batch.position,
                    self.dropoutKeepProb:0.5}
         _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
         return loss,acc
     
-    def dev(self,sess,batch):
+    def infe(self,sess,batch):
         feed_dict={self.inputX:batch.input_x,
-                   self.embeddedPosition:batch.transformer_position,
+                   self.embeddedPosition:batch.position,
                    self.dropoutKeepProb:0.5}
         pre=sess.run(self.predictions,feed_dict=feed_dict)
         return pre
     
-    def demo(self,sess,batch):
+    def test(self,sess,batch):
         feed_dict={self.inputX:batch.input_x,
                    self.inputY:batch.input_y,
-                   self.embeddedPosition:batch.transformer_position,
+                   self.embeddedPosition:batch.position,
                    self.dropoutKeepProb:0.5}
         pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
         return pre,acc
     
 class ELMo():
-    def __init__(self,flags,hiddensizes):
+    def __init__(self,flags):
         self.input_x=tf.placeholder(tf.float32,[None,flags.sequence_length,flags.embedding_dim],name="input_x")
         self.input_y=tf.placeholder(tf.float32,[None,flags.num_classes],name="input_y")
         self.keep_prob=tf.placeholder(tf.float32,name="drop_out_keep_prob")
+        self.l2Loss=tf.constant(0.0)
 
         with tf.name_scope("embedding"):
-            embedding=tf.get_variable("embedding",shape=[flags.embedding_dim,flags.embedding_dim],initializer=tf.contrib.layers.xavier_initializer())
+            embedding=tf.get_variable("embedding",shape=[flags.embedding_dim,flags.embedding_dim],initializer=tf.contrib.layers.xavier_initializer())  #全连接层
             xinput=tf.reshape(self.input_x,[-1,flags.embedding_dim])
             embedded=tf.matmul(xinput,embedding)
             self.embedded=tf.reshape(embedded,[-1,flags.sequence_length,flags.embedding_dim])
@@ -522,7 +531,7 @@ class ELMo():
 
         with tf.name_scope("bilstm"):
             binput=self.embedded
-            for i,hiddensize in enumerate(hiddensizes):
+            for i,hiddensize in enumerate(flags.hiddensizes):
                 with tf.variable_scope("bilstm-%d" % i):
                     fw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.LSTMCell(hiddensize),output_keep_prob=self.keep_prob)
                     bw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.LSTMCell(hiddensize),output_keep_prob=self.keep_prob)
@@ -532,21 +541,28 @@ class ELMo():
         
         with tf.name_scope("attention"):
             H=self.bilstm_out[0]+self.bilstm_out[1] #[batch_size,sequence_length,hiddensizes[-1]]
-            M=tf.reshape(tf.tanh(H),[-1,hiddensizes[-1]])
-            W=tf.get_variable("weigths",shape=[hiddensizes[-1],1],initializer=tf.contrib.layers.xavier_initializer())
+            M=tf.reshape(tf.tanh(H),[-1,flags.hiddensizes[-1]])
+            W=tf.get_variable("weigths",shape=[flags.hiddensizes[-1],1],initializer=tf.contrib.layers.xavier_initializer())
             alpha=tf.reshape(tf.matmul(M,W),[-1,flags.sequence_length])
             alpha=tf.nn.softmax(alpha) #[batch_size*sequence_length,1]
             alpha=tf.reshape(alpha,[-1,1,flags.sequence_length])
             r=tf.matmul(alpha,H) #[batch_size,1,hiddensizes[-1]]
-            self.hstar=tf.reshape(tf.tanh(r),[-1,hiddensizes[-1]])
+            self.hstar=tf.reshape(tf.tanh(r),[-1,flags.hiddensizes[-1]])
         
         with tf.name_scope("classifying"):
-            W=tf.get_variable("weights",shape=[hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            W=tf.get_variable("weights",shape=[flags.hiddensizes[-1],flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
-            self.out=tf.nn.softmax(tf.matmul(self.hstar,W)+b)
-            self.pre=tf.argmax(self.out,-1)
-            self.loss=tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=self.input_y,logits=self.out))
-            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.argmax(self.input_y,-1)),tf.float32))
+            self.l2Loss+=tf.nn.l2_loss(W)
+            self.logits=tf.matmul(self.hstar,W)+b
+            if flags.num_classes==1:
+                self.predictions=tf.cast(tf.greater_equal(self.logits,0.0),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.input_y, dtype=tf.float32)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))                
+            else:
+                self.predictions=tf.cast(tf.argmax(self.logits,-1),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=tf.argmax(self.input_y,-1)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
+            self.loss+=(flags.l2RegLambda*self.l2Loss)
         self.train_op=tf.train.GradientDescentOptimizer(flags.learning_rate).minimize(self.loss)
         self.saver=tf.train.Saver(tf.global_variables())
 
@@ -557,27 +573,26 @@ class ELMo():
         _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
         return loss,acc
     
-    def eval(self,sess,batch):
+    def test(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.input_y:batch.input_y,
                    self.keep_prob:0.5}
-        accuracy=sess.run(self.accuracy,feed_dict=feed_dict)
-        return accuracy
+        pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
     
-    def demo(self,sess,batch):
+    def infe(self,sess,batch):
         feed_dict={self.input_x:batch.input_x,
                    self.keep_prob:0.5}
-        pre=sess.run(self.pres,feed_dict=feed_dict)
-        return pre
+        pre,prob=sess.run([self.predictions,self.logits],feed_dict=feed_dict)
+        return pre,prob
     
 class HAN():
-    def __init__(self,flags,w2v,whiddensizes,shiddensizes):
+    def __init__(self,flags,w2v):
         self.input_x=tf.placeholder(tf.int32,[None,None,None],name="input_x") #[batch_size,document_length,sentence_length]
         self.input_y=tf.placeholder(tf.int32,[None,None],name="input_y")
         self.keep_prob=tf.placeholder(tf.float32,name="dropout_keep_prob")
         self.l2Loss=tf.constant(0.0)
         
-        #tf.reset_default_graph()
 
         with tf.name_scope("word-embedding"):
             if w2v is None:
@@ -590,7 +605,7 @@ class HAN():
         
         with tf.name_scope("word-encoder"):
             weinput=self.embedded
-            for i,hid in enumerate(whiddensizes):
+            for i,hid in enumerate(flags.whiddensizes):
                 with tf.variable_scope("wordencoder-%d" % i):
                     fw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
                     bw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
@@ -599,8 +614,8 @@ class HAN():
             self.word_encoder=weinput #[batch_size*document_length,sentence_length,whiddensizes[-1]*2]
 
         with tf.variable_scope("word-attention"):
-            h=tf.reshape(self.word_encoder,[-1,whiddensizes[-1]*2])
-            W=tf.get_variable(name="weights",shape=[whiddensizes[-1]*2,flags.wt_hidunits],initializer=tf.contrib.layers.xavier_initializer())
+            h=tf.reshape(self.word_encoder,[-1,flags.whiddensizes[-1]*2])
+            W=tf.get_variable(name="weights",shape=[flags.whiddensizes[-1]*2,flags.wt_hidunits],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable(name="bias",shape=[flags.wt_hidunits],initializer=tf.zeros_initializer())
             uw=tf.get_variable(name="Uw",shape=[flags.wt_hidunits,1],initializer=tf.contrib.layers.xavier_initializer())
             #u=tf.tanh(tf.matmul(h,W)+b)
@@ -609,13 +624,13 @@ class HAN():
             alpha=tf.reshape(tf.nn.softmax(u),[-1,1])
             self.word_attention=tf.reshape(alpha,[-1,flags.document_length,flags.sentence_length])
             s=h*alpha #???
-            s=tf.reshape(s,[-1,flags.document_length,flags.sentence_length,whiddensizes[-1]*2])
+            s=tf.reshape(s,[-1,flags.document_length,flags.sentence_length,flags.whiddensizes[-1]*2])
             #s=tf.reduce_sum(s,-2) #[batch_size,document_length,whiddensizes[-1]*2]
             self.sentence=tf.reduce_sum(s,-2)
         
         with tf.name_scope("sentence-encoder"):
             seinput=self.sentence
-            for i,hid in enumerate(shiddensizes):
+            for i,hid in enumerate(flags.shiddensizes):
                 with tf.variable_scope("sentenceencoder-%d" % i):
                     fw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
                     bw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
@@ -624,8 +639,8 @@ class HAN():
             self.sentence_encoder=seinput #[batch_size,document_length,shiddensizes[-1]*2]
 
         with tf.variable_scope("sentence_attention"):
-            sh=tf.reshape(self.sentence_encoder,[-1,shiddensizes[-1]*2])
-            W=tf.get_variable(name="weights",shape=[shiddensizes[-1]*2,flags.st_hidunits],initializer=tf.contrib.layers.xavier_initializer())
+            sh=tf.reshape(self.sentence_encoder,[-1,flags.shiddensizes[-1]*2])
+            W=tf.get_variable(name="weights",shape=[flags.shiddensizes[-1]*2,flags.st_hidunits],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable(name="bias",shape=[flags.st_hidunits],initializer=tf.zeros_initializer())
             us=tf.get_variable(name="Us",shape=[flags.st_hidunits,1],initializer=tf.contrib.layers.xavier_initializer())
             #su=tf.tanh(tf.matmul(sh,W)+b)
@@ -635,12 +650,12 @@ class HAN():
             alpha=tf.reshape(tf.nn.softmax(su),[-1,1])
             self.sentence_attention=tf.reshape(alpha,[-1,flags.document_length])
             #v=tf.multiply(alpha,sh) #???[batch_size*document_lenth,shiddensizes[-1]*2]
-            v=tf.reshape(tf.multiply(alpha,sh),[-1,flags.document_length,shiddensizes[-1]*2])
+            v=tf.reshape(tf.multiply(alpha,sh),[-1,flags.document_length,flags.shiddensizes[-1]*2])
             #v=tf.reduce_sum(v,-2) #[batch_size,shiddensizes[-1]*2]
             self.document=tf.reduce_sum(v,-2)
         
         with tf.variable_scope("classifying"):
-            W=tf.get_variable(name="weights",shape=[shiddensizes[-1]*2,flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            W=tf.get_variable(name="weights",shape=[flags.shiddensizes[-1]*2,flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             b=tf.get_variable(name="bias",shape=[flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
             self.l2Loss+=tf.nn.l2_loss(W)
             self.scores=tf.matmul(self.document,W)+b
@@ -801,3 +816,234 @@ class TextCNN(object):
                    self.dropoutKeepProb:0.5}
         pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
         return pre,acc
+
+class HANm():
+    def __init__(self,flags,w2v,whiddensizes,shiddensizes):
+        self.input_x=tf.placeholder(tf.int32,[None,None,None],name="input_x") #[batch_size,document_length,sentence_length]
+        self.input_y=tf.placeholder(tf.int32,[None,None],name="input_y")
+        self.sequence_length=tf.placeholder(tf.int32,[None,None],name="sequence_length") #[batch_size,document_length]
+        self.document_length=tf.placeholder(tf.int32,[None],name="document_length")
+        self.keep_prob=tf.placeholder(tf.float32,name="dropout_keep_prob")
+        self.l2Loss=tf.constant(0.0)
+        
+        #tf.reset_default_graph()
+
+        with tf.name_scope("word-embedding"):
+            if w2v is None:
+                self.embedding=tf.Variable(tf.random_uniform([flags.vocab_size,flags.embedding_dim],-1.0,1.0),name="embedding")
+            else:
+                self.embedding=tf.Variable(w2v,dtype=tf.float32,name="embedding")
+            inputx=tf.reshape(self.input_x,[-1,flags.sentence_length])
+            self.embedded=tf.nn.embedding_lookup(self.embedding,inputx)
+            self.embedded=tf.reshape(self.embedded,[-1,flags.sentence_length,flags.embedding_dim])
+        
+        with tf.variable_scope("word-encoder"):
+            sequence_length=tf.reshape(self.sequence_length,[-1])
+            weinput=self.embedded
+            for i,hid in enumerate(whiddensizes):
+                with tf.variable_scope("wordencoder-%d" % i):
+                    fw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
+                    bw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
+                    outputs,_=tf.nn.bidirectional_dynamic_rnn(fw,bw,weinput,sequence_length,dtype=tf.float32)
+                    weinput=tf.concat(outputs,-1)
+            self.word_encoder=weinput #[batch_size*document_length,sentence_length,whiddensizes[-1]*2]
+
+        with tf.variable_scope("word-attention"):
+            h=tf.reshape(self.word_encoder,[-1,whiddensizes[-1]*2])
+            W=tf.get_variable(name="weights",shape=[whiddensizes[-1]*2,flags.wt_hidunits],initializer=tf.contrib.layers.xavier_initializer())
+            b=tf.get_variable(name="bias",shape=[flags.wt_hidunits],initializer=tf.zeros_initializer())
+            uw=tf.get_variable(name="Uw",shape=[flags.wt_hidunits,1],initializer=tf.contrib.layers.xavier_initializer())
+            #u=tf.tanh(tf.matmul(h,W)+b)
+            #u=tf.matmul(u,uw) #[batch_size*document_length*sentence_length,1]
+            u=tf.reshape(tf.matmul(tf.tanh(tf.matmul(h,W)+b),uw),[-1,flags.document_length,flags.sentence_length])
+            alpha=tf.reshape(tf.nn.softmax(u),[-1,1])
+            self.word_attention=tf.reshape(alpha,[-1,flags.document_length,flags.sentence_length])
+            s=h*alpha #???
+            s=tf.reshape(s,[-1,flags.document_length,flags.sentence_length,whiddensizes[-1]*2])
+            #s=tf.reduce_sum(s,-2) #[batch_size,document_length,whiddensizes[-1]*2]
+            self.sentence=tf.reduce_sum(s,-2)
+        
+        with tf.name_scope("sentence-encoder"):
+            seinput=self.sentence
+            for i,hid in enumerate(shiddensizes):
+                with tf.variable_scope("sentenceencoder-%d" % i):
+                    fw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
+                    bw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.GRUCell(hid),output_keep_prob=self.keep_prob)
+                    outputs,_=tf.nn.bidirectional_dynamic_rnn(fw,bw,seinput,self.document_length,dtype=tf.float32)
+                    seinput=tf.concat(outputs,-1)
+            self.sentence_encoder=seinput #[batch_size,document_length,shiddensizes[-1]*2]
+
+        with tf.variable_scope("sentence_attention"):
+            sh=tf.reshape(self.sentence_encoder,[-1,shiddensizes[-1]*2])
+            W=tf.get_variable(name="weights",shape=[shiddensizes[-1]*2,flags.st_hidunits],initializer=tf.contrib.layers.xavier_initializer())
+            b=tf.get_variable(name="bias",shape=[flags.st_hidunits],initializer=tf.zeros_initializer())
+            us=tf.get_variable(name="Us",shape=[flags.st_hidunits,1],initializer=tf.contrib.layers.xavier_initializer())
+            #su=tf.tanh(tf.matmul(sh,W)+b)
+            #su=tf.matmul(su,us) #[batch_size*document_length,1]
+            su=tf.reshape(tf.matmul(tf.tanh(tf.matmul(sh,W)+b),us),[-1,flags.document_length])
+            #alpha=tf.nn.softmax(su)
+            alpha=tf.reshape(tf.nn.softmax(su),[-1,1])
+            self.sentence_attention=tf.reshape(alpha,[-1,flags.document_length])
+            #v=tf.multiply(alpha,sh) #???[batch_size*document_lenth,shiddensizes[-1]*2]
+            v=tf.reshape(tf.multiply(alpha,sh),[-1,flags.document_length,shiddensizes[-1]*2])
+            #v=tf.reduce_sum(v,-2) #[batch_size,shiddensizes[-1]*2]
+            self.document=tf.reduce_sum(v,-2)
+        
+        with tf.variable_scope("classifying"):
+            W=tf.get_variable(name="weights",shape=[shiddensizes[-1]*2,flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            b=tf.get_variable(name="bias",shape=[flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            self.l2Loss+=tf.nn.l2_loss(W)
+            self.scores=tf.matmul(self.document,W)+b
+
+            if flags.num_classes==1:
+                self.pre=tf.cast(tf.greater_equal(self.scores,0.0),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.scores,labels=tf.cast(self.input_y,dtype=tf.float32)))
+            else:
+                self.pre=tf.argmax(self.scores,-1)
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.scores,labels=self.input_y))
+            self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.pre,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))
+            self.loss+=(flags.l2RegLambda*self.l2Loss)
+        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
+        self.saver=tf.train.Saver(tf.global_variables())
+        #tf.get_variable_scope().reuse_variables()
+
+    def train(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
+                   self.keep_prob:0.5}
+        _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
+        return loss,acc
+    
+    def eval(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
+                   self.keep_prob:0.5}
+        accuracy=sess.run(self.accuracy,feed_dict=feed_dict)
+        return accuracy
+    
+    def demo(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
+                   self.keep_prob:0.5}
+        pre,acc=sess.run([self.pre,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
+    
+    def predict(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.keep_prob:0.5}
+        predictions=sess.run(self.pre,feed_dict=feed_dict)
+        return predictions
+    
+    def get_attention(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.keep_prob:0.5}
+        word_attention,sentence_attention=sess.run([self.word_attention,self.sentence_attention],feed_dict=feed_dict)
+        return word_attention,sentence_attention
+
+class Fragment():
+    def __init__(self,flags,w2v):
+        self.input_x=tf.placeholder(tf.int32,[None,None],name="input_x")
+        self.input_y=tf.placeholder(tf.int32,[None,flags.num_classes],name="input_y")
+        self.sequence_length=tf.placeholder(tf.int32,[None],name="sequence_length")
+        self.keep_prob=tf.placeholder(tf.float32, name="keep_prob")
+        self.l2Loss=tf.constant(0.0)
+
+        self.flags=flags
+        self.hiddensizes=flags.hiddensizes
+
+        with tf.name_scope("word-embedding"):
+            if w2v is None:
+                self.embedding=tf.Variable(tf.random_uniform([flags.vocab_size,flags.embedding_dim],-1.0,1.0))
+            else:
+                self.embedding=tf.Variable(w2v,trainable=False,dtype=tf.float32)
+            self.embedded=tf.nn.embedding_lookup(self.embedding,self.input_x)
+
+        with tf.name_scope("bilstm"):
+            binput=self.embedded
+            for i,hiddensize in enumerate(flags.hiddensizes):
+                with tf.variable_scope("bilstm-%d" % i):
+                    fw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.LSTMCell(hiddensize),output_keep_prob=self.keep_prob)
+                    bw=tf.contrib.rnn.DropoutWrapper(tf.contrib.rnn.LSTMCell(hiddensize),output_keep_prob=self.keep_prob)
+                    outputs,_=tf.nn.bidirectional_dynamic_rnn(fw,bw,binput,self.sequence_length,dtype=tf.float32)
+                    binput=tf.concat(outputs,-1)
+            self.bilstm_out=tf.split(binput,2,-1)
+            #self.bilstm_out=binput  #[batch_size,sequence_length,hiddensizes[-1]*2]
+        
+        with tf.name_scope("attention"):
+            H=self.bilstm_out[0]+self.bilstm_out[1] #[batch_size,sequence_length,flags.hiddensizes[-1]]
+            M=tf.reshape(tf.tanh(H),[-1,flags.hiddensizes[-1]])
+            W=tf.get_variable("weigths",shape=[flags.hiddensizes[-1],1],initializer=tf.contrib.layers.xavier_initializer())
+            alpha=tf.reshape(tf.matmul(M,W),[-1,flags.sequence_length])
+            alpha=tf.nn.softmax(alpha) #[batch_size*sequence_length,1]
+            alpha=tf.reshape(alpha,[-1,1,flags.sequence_length])
+            r=tf.matmul(alpha,H) #[batch_size,1,flags.hiddensizes[-1]]
+            self.hstar=tf.reshape(tf.tanh(r),[-1,flags.hiddensizes[-1]])
+        
+        with tf.name_scope("convolution"):
+            conv_input=tf.reshape(self.embedded,[-1,flags.sequence_length,flags.embedding_dim,1])
+            conv_outs=[]
+            for i,filter_size in enumerate(flags.filter_sizes):
+                with tf.variable_scope("conv-%d" % i):
+                    h=self.conv2d(conv_input,[filter_size,flags.embedding_dim,1,flags.featuremaps],"convolution-%d" % i,tf.nn.relu)
+                    output=tf.nn.max_pool(h,ksize=[1,flags.sequence_length-filter_size+1,1,1],strides=[1,1,1,1],padding='VALID') #[batch_size,1,1,featuremaps]
+                    conv_outs.append(output)
+            conv_output=tf.concat(conv_outs,-1) #[batch_size,1,1,featuremaps*len(filter_sizes)]
+            conv_out=tf.reshape(conv_output,[-1,flags.featuremaps*len(flags.filter_sizes)])
+            self.conv_out=tf.nn.dropout(conv_out,self.keep_prob)
+
+        self.stack_out=tf.concat([self.hstar,self.conv_out],-1) #[batch_size,hiddensizes[-1]+featuremaps*len(filter_sizes)]
+        with tf.name_scope("output"):
+            
+            wout=tf.get_variable("weight",shape=[flags.hiddensizes[-1]+flags.featuremaps*len(flags.filter_sizes),flags.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            bout=tf.get_variable("bias",shape=[flags.num_classes],initializer=tf.zeros_initializer())
+            self.l2Loss+=tf.nn.l2_loss(wout)
+            self.logits=tf.nn.xw_plus_b(self.stack_out,wout,bout)
+
+            if flags.num_classes==1:
+                self.predictions=tf.cast(tf.greater_equal(self.logits,0.0),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=tf.cast(self.input_y, dtype=tf.float32)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(self.input_y,dtype=tf.int32)),tf.float32))                
+            else:
+                self.predictions=tf.cast(tf.argmax(self.logits,-1),tf.int32,name="predictions")
+                self.loss=tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=tf.argmax(self.input_y,-1)))
+                self.accuracy=tf.reduce_mean(tf.cast(tf.equal(self.predictions,tf.cast(tf.argmax(self.input_y,-1),dtype=tf.int32)),tf.float32))
+            self.loss+=(flags.l2RegLambda*self.l2Loss)
+        self.train_op=tf.train.AdamOptimizer(flags.learning_rate).minimize(self.loss)
+        self.saver=tf.train.Saver(tf.global_variables())
+    
+    def conv2d(self,input,shape,scope_name,activation_function=None):
+        with tf.variable_scope(scope_name):
+            W=tf.get_variable("filter",shape,initializer=tf.truncated_normal_initializer())
+            b=tf.get_variable("bias",shape[-1],initializer=tf.zeros_initializer())
+            out=tf.nn.conv2d(input,W,strides=[1,1,1,1],padding='VALID')+b
+            if not activation_function:
+                return activation_function(W)
+            else:
+                return out
+    
+    def train(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
+                   self.sequence_length:batch.sequence_length,
+                   self.keep_prob:0.5}
+        _,loss,acc=sess.run([self.train_op,self.loss,self.accuracy],feed_dict=feed_dict)
+        return loss,acc
+    
+    def infe(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.sequence_length:batch.sequence_length,
+                   self.keep_prob:0.5}
+        pre,prob=sess.run([self.predictions,self.logits],feed_dict=feed_dict)
+        return pre,prob
+    
+    def test(self,sess,batch):
+        feed_dict={self.input_x:batch.input_x,
+                   self.input_y:batch.input_y,
+                   self.sequence_length:batch.sequence_length,
+                   self.keep_prob:0.5}
+        pre,acc=sess.run([self.predictions,self.accuracy],feed_dict=feed_dict)
+        return pre,acc
+    
+class Fragment2():
+    def __init__(self,flags,w2v):
+        pass
