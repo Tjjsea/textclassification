@@ -7,6 +7,7 @@ import jieba
 import numpy as np
 import random
 import time
+from bilm import TokenBatcher, BidirectionalLanguageModel, weight_layers, dump_token_embeddings, Batcher
 
 batch_size=128
 num_classes=1
@@ -25,7 +26,7 @@ class Batch():
         #self.transformer_position=[]
     
 class Config():
-    def __init__(self,mode):
+    def __init__(self):
         self.embedding_dim=embedding_dim
         self.num_classes=num_classes
         self.sequence_length=Max_Sequence_Length
@@ -34,57 +35,35 @@ class Config():
         self.hiddensizes=[256,128]
         self.l2RegLambda=0.5
         self.learning_rate=1e-4
-        w2n=json.load(open('data/edaw2n.json',encoding='utf-8'))
-        #w2n=json.load(open('model/textrnn/m4/edaw2n.json',encoding='utf-8'))
-        self.vocab_size=len(w2n)
         self.model_name='sentiment.ckpt'
         self.model_dir='../model/ELMO/'
+        self.vocab_file="model/vocabs.txt"                         #基于训练数据的词表，一行一个词
         self.option_file="model/elmo_small_options.json"
         self.weight_file="model/elmo_small_weights.hdf5"
-        self.tokenEmbeddingFile='model/vocabs.txt'
+        self.tokenEmbeddingFile='model/elmo_token_embedding.hdf5'  #词表中的词的向量表示
         
         self.numBlocks=2
         self.filters=128
         self.numHeads=8
         self.keepProp=0.9
         self.epsilon=1e-8
-
-def get_batch(mode,batch_size=batch_size):
-    data=json.load(open(Files[mode]))
-    random.shuffle(data)
-    w2n=json.load(open('data/edaw2n.json',encoding='utf-8'))
-
-    for i in range(0,len(data),batch_size):
-        ed=min(i+batch_size,len(data))
-        part=data[i:ed]
-        batch=Batch()
-        for sen in part:
-            label=int(sen[0])
-            words=sen.split(' ')[1:]
-            if len(words)>=Max_Sequence_Length:
-                words=words[:Max_Sequence_Length]
-                batch.sequence_length.append(Max_Sequence_Length)
-            nums=[]
-            for word in words:
-                if word in w2n:
-                    nums.append(w2n[word])
-                else:
-                    nums.append(0)
-            if len(nums)<Max_Sequence_Length:
-                batch.sequence_length.append(len(nums))
-                nums.extend([1]*(Max_Sequence_Length-len(nums)))
-            batch.input_x.append(nums)
-            if num_classes==1:
-                inputy=[label]
-            else:
-                inputy=[0]*num_classes
-                inputy[label]=1
-            batch.input_y.append(inputy)               #y是one-hot形式的
-            pos=[[0]*Max_Sequence_Length for i in range(Max_Sequence_Length)]
-            for j in range(Max_Sequence_Length):
-                pos[j][j]=1
-            batch.position.append(pos)
-        yield batch
     
+    def getElmoEmbedding(self):
+        dump_token_embeddings(self.vocab_file,self.option_file,self.weight_file,self.tokenEmbeddingFile)
+
+def getVocabs():
+    datas=json.load(open('../data/edatrain.json',encoding='utf-8'))
+
+    vocabs={'<S>','</S>','<UNK>'}
+    for line in datas:
+        line=line.split(' ')[1:]
+        for word in line:
+            vocabs.add(word)
+    vocabs=list(vocabs)
+    fout=open('model/vocabs.txt','w',encoding='utf-8')
+    fout.write('\n'.join(vocabs))
+    fout.close()
+
 if __name__=='__main__':
+    #getVocabs()
     pass
